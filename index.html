@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Exercise Evaluator</title>
+    <!-- Updated MediaPipe imports -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+
+        h1 {
+            margin: 20px 0;
+            color: #2c3e50;
+            text-align: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        #video, #output-canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+            transform: scaleX(-1); /* Mirror the video */
+        }
+
+        #output-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .metrics {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .metric-card {
+            flex: 1;
+            min-width: 120px;
+            padding: 15px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+
+        .feedback-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .feedback-item {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+        }
+
+        .feedback-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .indicator-red {
+            background-color: #e74c3c;
+        }
+
+        .indicator-green {
+            background-color: #2ecc71;
+        }
+
+        .indicator-yellow {
+            background-color: #f1c40f;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            
+            button {
+                width: 100%;
+            }
+            
+            .metrics {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Exercise Evaluator</h1>
+        
+        <div class="controls">
+            <button id="start-squats">Start Squats</button>
+            <button id="start-pushups">Start Push-Ups</button>
+            <button id="stop-exercise" disabled>Stop</button>
+        </div>
+        
+        <div class="video-container">
+            <video id="video" playsinline></video>
+            <canvas id="output-canvas"></canvas>
+        </div>
+        
+        <div class="status" id="status">Select an exercise to begin</div>
+        
+        <div class="metrics">
+            <div class="metric-card">
+                <div>Reps</div>
+                <div class="metric-value" id="rep-counter">0</div>
+            </div>
+            <div class="metric-card">
+                <div>Form Score</div>
+                <div class="metric-value" id="form-score">--</div>
+            </div>
+            <div class="metric-card">
+                <div>Phase</div>
+                <div class="metric-value" id="phase-display">--</div>
+            </div>
+        </div>
+        
+        <div class="feedback-container" id="feedback-container">
+            <h3>Form Feedback</h3>
+            <div id="feedback-list">
+                <div class="feedback-item">
+                    <div class="feedback-indicator indicator-yellow"></div>
+                    <div>Select an exercise to begin</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const config = {
+            video: document.getElementById('video'),
+            canvas: document.getElementById('output-canvas'),
+            startSquatsBtn: document.getElementById('start-squats'),
+            startPushupsBtn: document.getElementById('start-pushups'),
+            stopBtn: document.getElementById('stop-exercise'),
+            statusElement: document.getElementById('status'),
+            repCounter: document.getElementById('rep-counter'),
+            formScore: document.getElementById('form-score'),
+            phaseDisplay: document.getElementById('phase-display'),
+            feedbackList: document.getElementById('feedback-list'),
+            currentExercise: null,
+            isExerciseActive: false,
+            reps: 0,
+            // Exercise thresholds
+            squats: {
+                kneeMinAngle: 80, // Min angle for a proper squat
+                backAngleMin: 45, // Min proper back angle
+                backAngleMax: 75, // Max proper back angle
+                repCompleteThreshold: 130, // Angle to consider rep complete
+                repStartThreshold: 160, // Angle to consider new rep
+            },
+            pushups: {
+                elbowMinAngle: 70, // Min angle for proper pushup
+                elbowMaxAngle: 160, // Max angle for pushup starting position
+                backStraightnessTolerance: 15, // Degrees of tolerance for back alignment
+                repCompleteThreshold: 90, // Angle to consider rep complete
+                repStartThreshold: 150, // Angle to consider new rep
+            }
+        };
+
+        // MediaPipe pose connections - defining this manually as a fallback
+        const POSE_CONNECTIONS = [
+            [0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5], [5, 6], [6, 8],
+            [9, 10], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+            [11, 23], [12, 24], [23, 24], [23, 25], [24, 26], [25, 27],
+            [26, 28], [27, 29], [28, 30], [29, 31], [30, 32], [27, 31],
+            [28, 32]
+        ];
+
+        // State variables
+        let camera;
+        let pose;
+        let currentPhase = 'ready'; // 'ready', 'down', 'up'
+        let lastFramePoseData = null;
+        let feedbackItems = [];
+        let formScoreValue = 100;
+        
+        // Three.js setup for annotations
+        let scene, camera3D, renderer;
+        let annotations = [];
+
+        // Custom drawing function as fallback if MediaPipe's drawing utils aren't available
+        function customDrawConnectors(ctx, landmarks, connections, options = {}) {
+            const color = options.color || '#00FF00';
+            const lineWidth = options.lineWidth || 2;
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+            
+            for (const connection of connections) {
+                const [i, j] = connection;
+                if (landmarks[i] && landmarks[j]) {
+                    const point1 = landmarks[i];
+                    const point2 = landmarks[j];
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(point1.x * ctx.canvas.width, point1.y * ctx.canvas.height);
+                    ctx.lineTo(point2.x * ctx.canvas.width, point2.y * ctx.canvas.height);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Initialize MediaPipe Pose
+        async function initializePose() {
+            try {
+                pose = new Pose({
+                    locateFile: (file) => {
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+                    }
+                });
+
+                pose.setOptions({
+                    modelComplexity: 1,
+                    smoothLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                pose.onResults(onPoseResults);
+
+                // Setup camera
+                camera = new Camera(config.video, {
+                    onFrame: async () => {
+                        await pose.send({image: config.video});
+                    },
+                    width: 640,
+                    height: 480
+                });
+
+                // Start camera
+                await camera.start();
+                
+                // Set canvas dimensions
+                resizeCanvas();
+                window.addEventListener('resize', resizeCanvas);
+                
+                // Initialize Three.js
+                initThreeJS();
+                
+                // Update status
+                config.statusElement.textContent = "Camera initialized. Select an exercise to begin.";
+            } catch (error) {
+                console.error("Error initializing pose detection:", error);
+                config.statusElement.textContent = "Error initializing. Please check console for details.";
+            }
+        }
+
+        function resizeCanvas() {
+            const videoWidth = config.video.videoWidth || 640;
+            const videoHeight = config.video.videoHeight || 480;
+            const containerWidth = config.video.clientWidth;
+            const aspectRatio = videoHeight / videoWidth;
+            
+            config.canvas.width = containerWidth;
+            config.canvas.height = containerWidth * aspectRatio;
+        }
+
+        function initThreeJS() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            scene.background.alpha = 0;
+            
+            // Create camera
+            camera3D = new THREE.PerspectiveCamera(75, config.canvas.width / config.canvas.height, 0.1, 1000);
+            camera3D.position.z = 2;
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({
+                canvas: document.createElement('canvas'),
+                alpha: true
+            });
+            renderer.setSize(config.canvas.width, config.canvas.height);
+            renderer.setClearColor(0x000000, 0);
+            
+            // Add lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(0, 1, 1);
+            scene.add(directionalLight);
+        }
+
+        function onPoseResults(results) {
+            if (!config.isExerciseActive) return;
+            
+            // Draw pose landmarks on canvas
+            const ctx = config.canvas.getContext('2d');
+            ctx.clearRect(0, 0, config.canvas.width, config.canvas.height);
+            
+            if (results.poseLandmarks) {
+                // Use custom draw function as fallback if MediaPipe's isn't available
+                try {
+                    if (typeof drawConnectors === 'function') {
+                        drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, 
+                            {color: '#00FF00', lineWidth: 2});
+                    } else {
+                        customDrawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, 
+                            {color: '#00FF00', lineWidth: 2});
+                    }
+                } catch (error) {
+                    console.warn("Using fallback drawing method");
+                    customDrawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, 
+                        {color: '#00FF00', lineWidth: 2});
+                }
+                
+                // Process the pose data based on current exercise
+                processPoseData(results.poseLandmarks);
+                
+                // Draw custom annotated landmarks based on form feedback
+                drawCustomLandmarks(ctx, results.poseLandmarks);
+            }
+        }
+
+        function drawCustomLandmarks(ctx, landmarks) {
+            // Draw landmarks with color based on feedback
+            for (let i = 0; i < landmarks.length; i++) {
+                const landmark = landmarks[i];
+                
+                // Default color is green (good form)
+                let color = '#00FF00';
+                
+                // Check if this landmark is problematic based on feedback
+                if (feedbackItems.some(item => item.landmarkIndices && item.landmarkIndices.includes(i) && !item.isCorrect)) {
+                    color = '#FF0000'; // Red for bad form
+                }
+                
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(
+                    landmark.x * config.canvas.width,
+                    landmark.y * config.canvas.height,
+                    10, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        function processPoseData(landmarks) {
+            feedbackItems = [];
+            formScoreValue = 100;
+            
+            // Store the current pose data
+            lastFramePoseData = landmarks;
+            
+            if (config.currentExercise === 'squats') {
+                processSquats(landmarks);
+            } else if (config.currentExercise === 'pushups') {
+                processPushups(landmarks);
+            }
+            
+            // Update UI with feedback
+            updateFeedbackUI();
+            
+            // Update form score
+            config.formScore.textContent = formScoreValue;
+        }
+
+        function processSquats(landmarks) {
+            // Get key points for squat analysis
+            const leftHip = landmarks[23];
+            const leftKnee = landmarks[25];
+            const leftAnkle = landmarks[27];
+            const rightHip = landmarks[24];
+            const rightKnee = landmarks[26];
+            const rightAnkle = landmarks[28];
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            
+            // Calculate angles
+            const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+            const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+            const kneeAngle = (leftKneeAngle + rightKneeAngle) / 2;
+            
+            // Calculate back angle (angle between shoulders and hips)
+            const backAngle = calculateBackAngle(
+                [leftShoulder, rightShoulder], 
+                [leftHip, rightHip]
+            );
+            
+            // Update phase based on knee angle
+            updatePhase(kneeAngle);
+            
+            // Check form rules
+            checkSquatForm(kneeAngle, backAngle, landmarks);
+        }
+
+        function processPushups(landmarks) {
+            // Get key points for pushup analysis
+            const leftShoulder = landmarks[11];
+            const leftElbow = landmarks[13];
+            const leftWrist = landmarks[15];
+            const rightShoulder = landmarks[12];
+            const rightElbow = landmarks[14];
+            const rightWrist = landmarks[16];
+            
+            // Calculate angles
+            const leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+            const rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+            const elbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
+            
+            // Calculate back straightness
+            const backStraightness = calculateBackStraightness(landmarks);
+            
+            // Update phase based on elbow angle
+            updatePhase(elbowAngle);
+            
+            // Check form rules
+            checkPushupForm(elbowAngle, backStraightness, landmarks);
+        }
+
+        function updatePhase(angleValue) {
+            const thresholds = config.currentExercise === 'squats' 
+                ? config.squats
+                : config.pushups;
+            
+            // Check if completing a rep (going up from down position)
+            if (currentPhase === 'down' && angleValue > thresholds.repCompleteThreshold) {
+                currentPhase = 'up';
+                config.reps++;
+                config.repCounter.textContent = config.reps;
+            }
+            // Check if starting a new rep (going down from up position)
+            else if (currentPhase === 'up' && angleValue < thresholds.repStartThreshold) {
+                currentPhase = 'down';
+            }
+            // Initial phase
+            else if (currentPhase === 'ready' && angleValue < thresholds.repStartThreshold) {
+                currentPhase = 'down';
+            }
+            
+            // Update phase display
+            config.phaseDisplay.textContent = currentPhase.toUpperCase();
+        }
+
+        function checkSquatForm(kneeAngle, backAngle, landmarks) {
+            // Check knees bent enough in down phase
+            if (currentPhase === 'down' && kneeAngle > config.squats.kneeMinAngle) {
+                addFeedbackItem(
+                    'Squat deeper - bend your knees more',
+                    false,
+                    [25, 26], // Knee landmarks
+                    -15
+                );
+            }
+            
+            // Check back angle
+            if (backAngle < config.squats.backAngleMin) {
+                addFeedbackItem(
+                    'Keep your back more upright',
+                    false,
+                    [11, 12, 23, 24], // Shoulder and hip landmarks
+                    -15
+                );
+            } else if (backAngle > config.squats.backAngleMax) {
+                addFeedbackItem(
+                    'Lean forward slightly more',
+                    false,
+                    [11, 12, 23, 24], // Shoulder and hip landmarks
+                    -10
+                );
+            } else {
+                addFeedbackItem(
+                    'Back angle is good',
+                    true,
+                    [11, 12, 23, 24]
+                );
+            }
+            
+            // Check knees not caving in
+            const kneeAlignment = checkKneeAlignment(landmarks);
+            if (!kneeAlignment.isCorrect) {
+                addFeedbackItem(
+                    'Keep knees aligned with feet',
+                    false,
+                    [25, 26, 27, 28], // Knee and ankle landmarks
+                    -20
+                );
+            } else {
+                addFeedbackItem(
+                    'Knee alignment is good',
+                    true,
+                    [25, 26, 27, 28]
+                );
+            }
+        }
+
+        function checkPushupForm(elbowAngle, backStraightness, landmarks) {
+            // Check elbow bend in down phase
+            if (currentPhase === 'down' && elbowAngle > config.pushups.elbowMinAngle) {
+                addFeedbackItem(
+                    'Lower your chest more - bend elbows further',
+                    false,
+                    [13, 14], // Elbow landmarks
+                    -15
+                );
+            }
+            
+            // Check for full extension in up phase
+            if (currentPhase === 'up' && elbowAngle < config.pushups.elbowMaxAngle) {
+                addFeedbackItem(
+                    'Fully extend arms at the top',
+                    false,
+                    [13, 14], // Elbow landmarks
+                    -10
+                );
+            }
+            
+            // Check back straightness
+            if (Math.abs(backStraightness) > config.pushups.backStraightnessTolerance) {
+                addFeedbackItem(
+                    'Keep your back straight - no sagging or piking',
+                    false,
+                    [11, 12, 23, 24], // Shoulder and hip landmarks
+                    -20
+                );
+            } else {
+                addFeedbackItem(
+                    'Back alignment is good',
+                    true,
+                    [11, 12, 23, 24]
+                );
+            }
+            
+            // Check head alignment
+            const headAlignment = checkHeadAlignment(landmarks);
+            if (!headAlignment.isCorrect) {
+                addFeedbackItem(
+                    'Keep your head in line with your spine',
+                    false,
+                    [0, 11, 12], // Nose and shoulder landmarks
+                    -10
+                );
+            } else {
+                addFeedbackItem(
+                    'Head position is good',
+                    true,
+                    [0, 11, 12]
+                );
+            }
+        }
+
+        function addFeedbackItem(message, isCorrect, landmarkIndices, scoreImpact = 0) {
+            feedbackItems.push({
+                message,
+                isCorrect,
+                landmarkIndices,
+                scoreImpact
+            });
+            
+            // Update form score if there's an impact
+            if (!isCorrect && scoreImpact < 0) {
+                formScoreValue = Math.max(0, formScoreValue + scoreImpact);
+            }
+        }
+
+        function checkKneeAlignment(landmarks) {
+            const leftKnee = landmarks[25];
+            const leftAnkle = landmarks[27];
+            const rightKnee = landmarks[26];
+            const rightAnkle = landmarks[28];
+            
+            // Simple horizontal alignment check
+            const leftKneeX = leftKnee.x;
+            const leftAnkleX = leftAnkle.x;
+            const rightKneeX = rightKnee.x;
+            const rightAnkleX = rightAnkle.x;
+            
+            const leftDiff = Math.abs(leftKneeX - leftAnkleX);
+            const rightDiff = Math.abs(rightKneeX - rightAnkleX);
+            
+            const isCorrect = leftDiff < 0.05 && rightDiff < 0.05;
+            
+            return {
+                isCorrect,
+                message: isCorrect ? 'Knees aligned with feet' : 'Knees not aligned with feet'
+            };
+        }
+
+        function checkHeadAlignment(landmarks) {
+            const nose = landmarks[0];
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            
+            // Average shoulder position
+            const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+            
+            // Head should not be too far down or up
+            const headDiff = Math.abs(nose.y - shoulderY);
+            const isCorrect = headDiff < 0.15;
+            
+            return {
+                isCorrect,
+                message: isCorrect ? 'Head aligned with spine' : 'Head not aligned with spine'
+            };
+        }
+
+        function calculateAngle(a, b, c) {
+            // Calculate angle between three points (in degrees)
+            const radians = Math.atan2(c.y - b.y, c.x - b.x) - 
+                           Math.atan2(a.y - b.y, a.x - b.x);
+            let angle = Math.abs(radians * 180.0 / Math.PI);
+            
+            if (angle > 180.0) {
+                angle = 360 - angle;
+            }
+            
+            return angle;
+        }
+
+        function calculateBackAngle(shoulders, hips) {
+            // Calculate the angle of the back relative to vertical
+            const midShoulder = {
+                x: (shoulders[0].x + shoulders[1].x) / 2,
+                y: (shoulders[0].y + shoulders[1].y) / 2
+            };
+            
+            const midHip = {
+                x: (hips[0].x + hips[1].x) / 2,
+                y: (hips[0].y + hips[1].y) / 2
+            };
+            
+            // Calculate angle with vertical
+            const dy = midShoulder.y - midHip.y;
+            const dx = midShoulder.x - midHip.x;
+            let angle = Math.atan2(dx, dy) * 180 / Math.PI;
+            
+            // Make the angle positive
+            angle = Math.abs(angle);
+            
+            return angle;
+        }
+
+        function calculateBackStraightness(landmarks) {
+            // Calculate back straightness using shoulders, hips and knees
+            const midShoulder = {
+                x: (landmarks[11].x + landmarks[12].x) / 2,
+                y: (landmarks[11].y + landmarks[12].y) / 2
+            };
+            
+            const midHip = {
+                x: (landmarks[23].x + landmarks[24].x) / 2,
+                y: (landmarks[23].y + landmarks[24].y) / 2
+            };
+            
+            const midKnee = {
+                x: (landmarks[25].x + landmarks[26].x) / 2,
+                y: (landmarks[25].y + landmarks[26].y) / 2
+            };
+            
+            // Calculate the angle between the lines from midKnee to midHip, and midHip to midShoulder
+            const angle1 = Math.atan2(midHip.y - midKnee.y, midHip.x - midKnee.x);
+            const angle2 = Math.atan2(midShoulder.y - midHip.y, midShoulder.x - midHip.x);
+            
+            // Calculate the difference in angles (in degrees)
+            let angleDiff = (angle2 - angle1) * 180 / Math.PI;
+            
+            // Normalize to [-180, 180]
+            while (angleDiff > 180) angleDiff -= 360;
+            while (angleDiff < -180) angleDiff += 360;
+            
+            return angleDiff;
+        }
+
+        function updateFeedbackUI() {
+            // Clear existing feedback
+            config.feedbackList.innerHTML = '';
+            
+            // Add new feedback items
+            feedbackItems.forEach(item => {
+                const feedbackItem = document.createElement('div');
+                feedbackItem.className = 'feedback-item';
+                
+                const indicator = document.createElement('div');
+                indicator.className = `feedback-indicator indicator-${item.isCorrect ? 'green' : 'red'}`;
+                
+                const message = document.createElement('div');
+                message.textContent = item.message;
+                
+                feedbackItem.appendChild(indicator);
+                feedbackItem.appendChild(message);
+                config.feedbackList.appendChild(feedbackItem);
+            });
+        }
+
+        function startExercise(exerciseType) {
+            config.currentExercise = exerciseType;
+            config.isExerciseActive = true;
+            config.reps = 0;
+            config.repCounter.textContent = '0';
+            config.formScore.textContent = '100';
+            currentPhase = 'ready';
+            config.phaseDisplay.textContent = 'READY';
+            
+            // Update UI
+            config.startSquatsBtn.disabled = true;
+            config.startPushupsBtn.disabled = true;
+            config.stopBtn.disabled = false;
+            
+            // Update status
+            config.statusElement.textContent = 
+                `${exerciseType.charAt(0).toUpperCase() + exerciseType.slice(1)} tracking active`;
+        }
+
+        function stopExercise() {
+            config.isExerciseActive = false;
+            
+            // Update UI
+            config.startSquatsBtn.disabled = false;
+            config.startPushupsBtn.disabled = false;
+            config.stopBtn.disabled = true;
+            
+            // Update status
+            config.statusElement.textContent = `Exercise stopped. You completed ${config.reps} reps with a form score of ${formScoreValue}`;
+            
+            // Clear feedback
+            config.feedbackList.innerHTML = '';
+            feedbackItems = [];
+        }
+
+        // Event listeners
+        config.startSquatsBtn.addEventListener('click', () => startExercise('squats'));
+        config.startPushupsBtn.addEventListener('click', () => startExercise('pushups'));
+        config.stopBtn.addEventListener('click', stopExercise);
+
+        // Initialize the system
+        document.addEventListener('DOMContentLoaded', initializePose);
+    </script>
+</body>
+</html>
